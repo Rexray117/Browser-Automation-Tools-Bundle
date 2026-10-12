@@ -1,0 +1,44 @@
+{
+  "_comment": "站点画像示例。实际文件位于 ~/.super-auto-web-toolpack/site_profiles.json，由 fetch.py 自动维护。",
+  "_fields": {
+    "preferred_tier": "该域名下次抓取的起跳层级（成功后被抬高）",
+    "preferred_backend": "上次走通的后端标识",
+    "success": "累计成功次数",
+    "fail": "连续失败次数（成功后清零）",
+    "blocks": "累计被拦截次数",
+    "vendors_seen": "曾观测到的反爬厂商"
+  },
+  "example.com": {
+    "domain": "example.com",
+    "preferred_tier": 1,
+    "preferred_backend": "patchright[chrome]",
+    "success": 12,
+    "fail": 0,
+    "blocks": 3,
+    "vendors_seen": ["cloudflare"],
+    "last_url": "https://example.com/products/42",
+    "updated_at": "2026-10-12T09:56:50+08:00"
+  },
+  "static-docs.example.org": {
+    "domain": "static-docs.example.org",
+    "preferred_tier": 0,
+    "preferred_backend": "curl_cffi",
+    "success": 40,
+    "fail": 0,
+    "blocks": 0,
+    "vendors_seen": [],
+    "last_url": "https://static-docs.example.org/guide/install",
+    "updated_at": "2026-10-12T09:58:00+08:00"
+  },
+  "hard-target.example.net": {
+    "domain": "hard-target.example.net",
+    "preferred_tier": 2,
+    "preferred_backend": "cloakbrowser",
+    "success": 5,
+    "fail": 0,
+    "blocks": 9,
+    "vendors_seen": ["datadome", "cloudflare"],
+    "last_url": "https://hard-target.example.net/list?page=1",
+    "updated_at": "2026-10-12T10:01:12+08:00"
+  }
+}
