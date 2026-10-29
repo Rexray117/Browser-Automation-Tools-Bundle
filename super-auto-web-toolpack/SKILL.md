@@ -76,6 +76,9 @@ python -m venv .venv
 
 pip install curl_cffi patchright      # T0 + T1（必备）
 python -m patchright install chromium # 或复用系统 Chrome 免下载
+
+# 或一键安装全部分层依赖（版本组合已实测固化，含版本张力说明）：
+pip install -r <SKILL_DIR>/requirements.txt
 ```
 
 依赖均来自 **PyPI 官方源**。详细的备份、许可与体积对照见 `references/adapters.md`。
@@ -223,8 +226,11 @@ python <SKILL_DIR>/scripts/fetch.py --urls-file urls.txt [选项]
 |---|---|
 | 盘点本机小程序包（**纯只读**） | `python scripts/mp_discover.py` |
 | W1 环境检测 | `python scripts/mp_automator.py check` |
+| W1 生成测试项目（TDesign，游客模式） | `python scripts/mp_automator.py scaffold` |
+| W1 手动构建 miniprogram_npm（免 IDE 点击） | `python scripts/mp_automator.py build-npm --project <目录>` |
 | W1 生成自动化脚本 | `python scripts/mp_automator.py init --project <目录>` |
 | W1 操作指引 | `python scripts/mp_automator.py guide` |
+| W1 一键断言（装好工具+扫码后） | `node ~/.super-auto-web-toolpack/mp_automator/demo_test.js` |
 | W2 生成抓包工作区 | `python scripts/mp_capture.py init` |
 | W2 启动抓包 | `python scripts/mp_capture.py run --dir <工作区>` |
 | W2 汇总 API 清单 | `python scripts/mp_capture.py report --dir <工作区>` |

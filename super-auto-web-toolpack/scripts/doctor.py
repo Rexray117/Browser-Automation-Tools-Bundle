@@ -260,6 +260,13 @@ def check_miniprogram() -> None:
 
     # W2：mitmproxy + 微信客户端
     mitm = _sh.which("mitmdump") or _sh.which("mitmproxy")
+    if not mitm:
+        # 回退：当前解释器同目录的 Scripts/（venv 不在 PATH 时的常见情况）
+        for cand in (Path(sys.executable).parent / "mitmdump.exe",
+                     Path(sys.executable).parent / "mitmdump"):
+            if cand.exists():
+                mitm = str(cand)
+                break
     wechat = None
     for p in (Path("E:/Program Files/Weixin/Weixin.exe"),
               Path("C:/Program Files/Tencent/WeChat/WeChat.exe"),

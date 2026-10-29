@@ -63,11 +63,56 @@ V1MMWX + 加密载荷
 2. 开发者工具 → 设置 → 安全设置 → 打开**「服务端口」**
 3. 有目标小程序的**源码项目目录**
 
+### 快速开始（scaffold 一键生成测试项目）
+
+没有现成项目？用 `scaffold` 生成一个**专为 automator 测试设计**的
+TDesign 小程序项目（appid 用游客模式 `touristappid`，无需注册小程序）：
+
 ```bash
-python scripts/mp_automator.py check                    # 环境检测
-python scripts/mp_automator.py init --project "D:/mp-x" # 生成 Node 脚本
-cd <工作区> && npm install && node mp_auto.js
+python scripts/mp_automator.py scaffold              # 生成 demo_project + demo_test.js
+cd <工作区>/demo_project && npm install              # tdesign-miniprogram（组件库）
+cd <工作区> && npm install miniprogram-automator     # 官方 SDK（装在测试端工作区，勿装进项目）
+python scripts/mp_automator.py build-npm --project <demo_project>
+node <工作区>/demo_test.js                           # 装好工具+扫码后一键断言
 ```
+
+**`build-npm` 是什么**：复刻微信「工具 → 构建 npm」的规则——
+读每个依赖包 `package.json` 的 `miniprogram` 字段（tdesign 是 `miniprogram_dist`），
+拷贝到 `miniprogram_npm/<包名>/`，并自动清理孤儿包。
+这样**无需在开发者工具里手动点构建**，项目开箱即用。
+
+**demo_test.js 的断言契约**（scaffold 生成的页面里预埋好了）：
+
+| 断言 | 对应页面行为 |
+|---|---|
+| `page.data().loaded === true` | index 页 onLoad 里 setData |
+| `clicked === true`（tap `#main-btn` 后） | TDesign t-button 的 bind:tap |
+| `page.path === 'pages/form/form'`（navigateTo 后） | 页面跳转 |
+| form 页 data 含 `keyword` / `count` | t-input / t-stepper 可交互 |
+
+**为什么用 TDesign 而不是裸 view**：TDesign 是自定义组件，
+automator 的 `page.$('#main-btn')` 拿到的是**组件宿主元素**——
+这恰好验证了"第三方组件库 + automator"的组合可用性，比裸 view 更接近真实项目。
+
+### 环境检测
+
+```bash
+python scripts/mp_automator.py check --project <项目目录>
+```
+
+**实测记录（2026-10-12）**：
+- 开发者工具 2.02.2609231 经 NSIS `/S` **静默安装成功**（196.8MB，官方 CDN `dldir1.qq.com`）
+- `cli --version` 正常 → CLI 本身可用
+- `cli islogin` 报 `ENOENT: ...User Data\...\.cli` → **IDE 从未启动过**，服务端口握手文件不存在
+- `automator.launch` 失败路径优雅：明确报错 + 列出常见原因
+
+### 剩余的人工步骤（无法自动化——微信身份验证的设计边界）
+
+1. **首次启动**：双击微信开发者工具，完成初始化
+2. **扫码登录**：微信扫码（`cli login` 同样要扫码）
+3. **开服务端口**：设置 → 安全设置 → 打开「服务端口」
+
+完成后 `node demo_test.js` 应输出 `4 通过 / 0 失败`。
 
 **为什么它最值得优先考虑**：
 - 唯一**不逆源码、不注入进程、不破解签名**的路线
@@ -79,6 +124,10 @@ cd <工作区> && npm install && node mp_auto.js
 它的 npm 元数据显示仓库地址是 `git@git.code.oa.com:devtools/automator.git`——
 **腾讯内网 Git，不在 GitHub 上开源**。所以它没有公开源码可审计。
 这一点与 W2/W3 用的开源工具不同，知情后自行权衡。
+
+**依赖边界（易犯）**：`miniprogram-automator` 是 **Node 测试端** SDK，
+**不要装进小程序项目里**（会被 build-npm 构建进 `miniprogram_npm`，污染运行时包）。
+正确结构：SDK 在 automator 工作区，项目里只有组件库。
 
 ---
 

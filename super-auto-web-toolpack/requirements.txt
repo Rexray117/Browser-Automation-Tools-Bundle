@@ -1,0 +1,30 @@
+# super-auto-web-toolpack 依赖清单
+# 版本组合 = 2026-10-12 全后端实测通过的组合（见各条注释）
+#
+# 安装（建议在虚拟环境中）：
+#   python -m venv .venv && .venv/Scripts/activate   # Windows
+#   pip install -r requirements.txt
+#
+# T2 浏览器二进制需在装完包后单独下载（体积大）：
+#   python -c "import cloakbrowser; cloakbrowser.ensure_binary()"   # ~536 MB
+#   python -m camoufox fetch                                        # ~2.5 GB（实测）
+
+# ---- 网页层 · 必备（T0 + T1）----
+curl_cffi==0.16.3          # T0：TLS/JA3 指纹直连
+patchright==1.63.0         # T1：补丁版 Playwright（独立包，不与原版 playwright 冲突）
+                           # 装后执行：python -m patchright install chromium
+                           # （或复用系统 Chrome：channel="chrome"，免下载）
+
+# ---- 网页层 · T2 重武器（可选）----
+cloakbrowser==0.6.1        # Chromium 146 源码级补丁；二进制带 Ed25519 签名校验
+camoufox==0.5.8            # Firefox 指纹随机化
+
+# ---- 小程序层 · W2 抓包（可选）----
+mitmproxy==12.2.3          # 注意 10+ 已移除 `python -m mitmdump` 入口，
+                           # 只能用 Scripts/mitmdump 可执行文件
+
+# ⚠ 版本张力说明（实测结论，非猜测）：
+#   camoufox 的依赖会把 playwright 钉在 1.62.0；
+#   cloakbrowser 默认装 1.63.0。同环境共存时 pip 会自动降级 playwright，
+#   **四个后端在该组合下实测均正常**。若重装，建议按本文件顺序安装：
+#   先 curl_cffi/patchright → cloakbrowser → camoufox（后装的会定 playwright 版本）。

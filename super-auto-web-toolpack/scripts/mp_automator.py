@@ -231,6 +231,354 @@ def cmd_guide(args) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# scaffold：生成专为 automator 测试设计的 TDesign 小程序项目
+# --------------------------------------------------------------------------- #
+# 项目设计要点（为什么每个文件长这样）：
+#   * 页面 onLoad 即 setData({loaded: true, ...}) —— automator 拿 page.data()
+#     可直接断言"页面已就绪"，不依赖任何 DOM 探测
+#   * 一个绑定 tap 的按钮 setData({clicked: true}) —— 可断言交互链路
+#   * 表单页含 t-input —— 可测 automator 的 input()
+#   * app.json 刻意不带 "style": "v2" —— TDesign 官方要求，否则样式冲突
+#   * project.config.json 配 packNpmManually —— 配合 build-npm 离线构建
+
+_PROJECT_CONFIG = {
+    "appid": "touristappid",          # 游客模式 appid，无需注册小程序
+    "compileType": "miniprogram",
+    "libVersion": "2.33.0",
+    "projectname": "sawt-automator-demo",
+    "setting": {
+        "es6": True,
+        "postcss": True,
+        "minified": True,
+        "packNpmManually": True,
+        "packNpmRelationList": [{
+            "packageJsonPath": "./package.json",
+            "miniprogramNpmDistDir": "./",
+        }],
+    },
+}
+
+_APP_JSON = {
+    "pages": ["pages/index/index", "pages/form/form"],
+    "window": {
+        "navigationBarTitleText": "SAWT Automator Demo",
+        "navigationBarBackgroundColor": "#0052d9",
+        "navigationBarTextStyle": "white",
+    },
+    "sitemapLocation": "sitemap.json",
+}
+# 注意：刻意不带 "style": "v2"（TDesign 要求移除，否则样式冲突）
+
+_APP_JS = """App({
+  onLaunch() {
+    // 供 automator 断言 app 已启动
+    this.globalData = { launchedAt: Date.now() };
+  },
+  globalData: {},
+});
+"""
+
+_APP_WXSS = """page {
+  --td-button-primary-bg-color: #0052d9;
+  background: #f6f7f9;
+  font-size: 28rpx;
+}
+"""
+
+_SITEMAP = {"desc": "sawt demo", "rules": [{"action": "allow", "page": "*"}]}
+
+_INDEX_JSON = {
+    "usingComponents": {
+        "t-button": "tdesign-miniprogram/button/button",
+        "t-cell": "tdesign-miniprogram/cell/cell",
+        "t-cell-group": "tdesign-miniprogram/cell-group/cell-group",
+        "t-tag": "tdesign-miniprogram/tag/tag",
+    }
+}
+
+_INDEX_WXML = """<view class="page">
+  <view class="hero">
+    <t-tag theme="primary" variant="light">W1 automator demo</t-tag>
+    <view class="title">Super auto-web toolpack</view>
+  </view>
+
+  <t-cell-group>
+    <t-cell title="页面状态" note="{{loaded ? '已加载' : '加载中'}}" />
+    <t-cell title="点击状态" note="{{clicked ? '已点击' : '未点击'}}" />
+    <t-cell title="加载时间" note="{{loadedAt}}" />
+  </t-cell-group>
+
+  <view class="actions">
+    <t-button theme="primary" size="large" block bind:tap="onTap"
+              id="main-btn">点我（automator 可断言）</t-button>
+    <t-button theme="light" size="large" block bind:tap="goForm"
+              id="go-form">去表单页</t-button>
+  </view>
+</view>
+"""
+
+_INDEX_WXSS = """.page { padding: 32rpx; }
+.hero { padding: 48rpx 0 24rpx; }
+.title { font-size: 40rpx; font-weight: 600; margin-top: 16rpx; }
+.actions { margin-top: 48rpx; display: flex; flex-direction: column; gap: 24rpx; }
+"""
+
+_INDEX_JS = """Page({
+  data: {
+    loaded: false,
+    clicked: false,
+    loadedAt: '',
+  },
+  onLoad() {
+    // automator 可断言：page.data().loaded === true
+    this.setData({
+      loaded: true,
+      loadedAt: new Date().toLocaleString(),
+    });
+  },
+  onTap() {
+    // automator：page.$('#main-btn') → tap() → 断言 clicked === true
+    this.setData({ clicked: true });
+  },
+  goForm() {
+    wx.navigateTo({ url: '/pages/form/form' });
+  },
+});
+"""
+
+_FORM_JSON = {
+    "usingComponents": {
+        "t-input": "tdesign-miniprogram/input/input",
+        "t-stepper": "tdesign-miniprogram/stepper/stepper",
+        "t-button": "tdesign-miniprogram/button/button",
+    }
+}
+
+_FORM_WXML = """<view class="page">
+  <view class="title">表单交互（automator input 可测）</view>
+
+  <t-input label="关键词" placeholder="输入后 automator 可断言"
+           value="{{keyword}}" bind:change="onKeyword" />
+
+  <view class="row">
+    <text class="label">数量</text>
+    <t-stepper value="{{count}}" min="1" max="99" bind:change="onCount" />
+  </view>
+
+  <view class="summary">已输入：{{keyword || '（空）'}} × {{count}}</view>
+
+  <t-button theme="primary" block bind:tap="submit" id="submit-btn">提交</t-button>
+</view>
+"""
+
+_FORM_WXSS = """.page { padding: 32rpx; }
+.title { font-size: 36rpx; font-weight: 600; padding: 24rpx 0; }
+.row { display: flex; align-items: center; padding: 16rpx 32rpx; }
+.label { width: 140rpx; }
+.summary { padding: 32rpx; color: #666; }
+"""
+
+_FORM_JS = """Page({
+  data: { keyword: '', count: 1, submitted: false },
+  onKeyword(e) {
+    this.setData({ keyword: e.detail.value });
+  },
+  onCount(e) {
+    this.setData({ count: e.detail.value });
+  },
+  submit() {
+    // automator：input() 后 tap('#submit-btn') → 断言 submitted === true
+    this.setData({ submitted: true });
+  },
+});
+"""
+
+# 配套断言脚本：装好工具+扫码后，`node demo_test.js` 一键验证 W1 全链路。
+# 每个断言都对应 scaffold 页面里预埋的数据契约（loaded / clicked / 页面路径）。
+_DEMO_TEST_JS = """// W1 全链路断言脚本（由 super-auto-web-toolpack scaffold 生成）
+// 运行前提：微信开发者工具已安装、已扫码登录、已开启「服务端口」
+// 运行：  node demo_test.js
+const automator = require('miniprogram-automator');
+const path = require('path');
+
+const PROJECT = path.join(__dirname, 'demo_project');
+let passed = 0, failed = 0;
+function check(name, cond, detail) {
+  if (cond) { passed++; console.log('  [PASS]', name); }
+  else { failed++; console.log('  [FAIL]', name, detail !== undefined ? `(${JSON.stringify(detail)})` : ''); }
+}
+
+(async () => {
+  let mini;
+  try {
+    console.log('启动开发者工具并加载项目…（首次约 30–60s）');
+    mini = await automator.launch({
+      projectPath: PROJECT,
+      // cliPath 留空时 SDK 会用默认安装位置；必要时：
+      // cliPath: 'C:/Program Files (x86)/Tencent/微信web开发者工具/cli.bat',
+    });
+    console.log('✓ 已连接\\n');
+
+    // ---- 1) 首页加载断言 ----
+    let page = await mini.currentPage();
+    console.log('首页:', page.path);
+    let data = await page.data();
+    check('页面路径 = pages/index/index', page.path === 'pages/index/index', page.path);
+    check('loaded === true（onLoad setData 生效）', data.loaded === true, data.loaded);
+    check('loadedAt 非空', !!data.loadedAt, data.loadedAt);
+
+    // ---- 2) 交互断言：tap 按钮 → clicked 变 true ----
+    const btn = await page.$('#main-btn');
+    check('找到 #main-btn（TDesign 组件渲染成功）', !!btn);
+    if (btn) { await btn.tap(); await new Promise(r => setTimeout(r, 500)); }
+    data = await page.data();
+    check('clicked === true（tap 事件生效）', data.clicked === true, data.clicked);
+
+    // ---- 3) 页面跳转断言 ----
+    await mini.navigateTo('/pages/form/form');
+    page = await mini.currentPage();
+    check('跳转后路径 = pages/form/form', page.path === 'pages/form/form', page.path);
+
+    // ---- 4) 表单页数据契约 ----
+    data = await page.data();
+    check('form 页 data 可读（keyword/count 存在）',
+          'keyword' in data && 'count' in data, data);
+
+    console.log(`\\n结果：${passed} 通过 / ${failed} 失败`);
+    await mini.close();
+    process.exit(failed ? 1 : 0);
+  } catch (e) {
+    console.error('\\n[启动失败]', e && e.message ? e.message : e);
+    console.error('常见原因：① 工具未安装/未登录 ② 未开启「设置→安全设置→服务端口」');
+    if (mini) { try { await mini.close(); } catch (_) {} }
+    process.exit(2);
+  }
+})();
+"""
+
+
+def cmd_scaffold(args) -> int:
+    d = Path(args.project) if args.project else (AUTOMATOR_DIR / "demo_project")
+    if d.exists() and any(d.iterdir()) and not args.force:
+        print(f"目录非空：{d}\n如需覆盖请加 --force", file=sys.stderr)
+        return 2
+    import json as _json
+
+    pages = {
+        "pages/index": (_INDEX_JSON, _INDEX_WXML, _INDEX_WXSS, _INDEX_JS),
+        "pages/form": (_FORM_JSON, _FORM_WXML, _FORM_WXSS, _FORM_JS),
+    }
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "project.config.json").write_text(
+        _json.dumps(_PROJECT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
+    (d / "app.json").write_text(
+        _json.dumps(_APP_JSON, ensure_ascii=False, indent=2), encoding="utf-8")
+    (d / "app.js").write_text(_APP_JS, encoding="utf-8")
+    (d / "app.wxss").write_text(_APP_WXSS, encoding="utf-8")
+    (d / "sitemap.json").write_text(
+        _json.dumps(_SITEMAP, ensure_ascii=False), encoding="utf-8")
+    (d / "package.json").write_text(_json.dumps({
+        "name": "sawt-automator-demo",
+        "version": "1.0.0",
+        "dependencies": {"tdesign-miniprogram": "^1.8.0"},
+    }, indent=2), encoding="utf-8")
+    for base, (jc, wxml, wxss, js) in pages.items():
+        p = d / base
+        p.mkdir(parents=True, exist_ok=True)
+        name = base.rsplit("/", 1)[-1]
+        (p / f"{name}.json").write_text(
+            _json.dumps(jc, ensure_ascii=False, indent=2), encoding="utf-8")
+        (p / f"{name}.wxml").write_text(wxml, encoding="utf-8")
+        (p / f"{name}.wxss").write_text(wxss, encoding="utf-8")
+        (p / f"{name}.js").write_text(js, encoding="utf-8")
+    # 断言脚本写到工作区根（demo_project 的旁边），依赖工作区的 miniprogram-automator
+    ws = d.parent
+    test_js = ws / "demo_test.js"
+    test_js.write_text(_DEMO_TEST_JS, encoding="utf-8")
+    print(f"已生成 TDesign 测试项目：{d}")
+    print("  · pages/index  —— 加载/点击断言点（loaded / clicked）")
+    print("  · pages/form   —— 输入断言点（keyword / count / submitted）")
+    print("  · appid=touristappid（游客模式，无需注册）")
+    print(f"  · {test_js}  —— 一键断言脚本")
+    print()
+    print("下一步：")
+    print(f'  1) cd "{d}" && npm install          # 装 tdesign-miniprogram')
+    print(f'  2) cd "{ws}" && npm install miniprogram-automator   # SDK 装在测试端工作区')
+    print(f"  3) python {Path(__file__).name} build-npm --project \"{d}\"")
+    print(f"  4) python {Path(__file__).name} check --project \"{d}\"")
+    print(f"  5) 装好工具并扫码登录后：cd \"{ws}\" && node demo_test.js")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# build-npm：按微信官方规则手动构建 miniprogram_npm（不依赖开发者工具）
+# --------------------------------------------------------------------------- #
+def _copytree(src: Path, dst: Path) -> None:
+    import shutil
+    if dst.exists():
+        shutil.rmtree(dst)          # 只删构建产物目录（miniprogram_npm/<pkg>），安全
+    shutil.copytree(src, dst)
+
+
+def cmd_build_npm(args) -> int:
+    """复刻微信「构建 npm」的规则：
+    对 package.json 的每个依赖，读取其 package.json 的 `miniprogram` 字段
+    （缺省为包根目录），把该目录拷贝到 <project>/miniprogram_npm/<pkg>/。
+    这样无需在开发者工具里手动点「工具 → 构建 npm」。
+    """
+    import json as _json
+    proj = Path(args.project)
+    pj = proj / "package.json"
+    if not pj.exists():
+        print(f"未找到 {pj}；请先在项目里 npm install", file=sys.stderr)
+        return 2
+    deps = (_json.loads(pj.read_text(encoding="utf-8")).get("dependencies") or {})
+    if not deps:
+        print("package.json 无 dependencies，无需构建")
+        return 0
+    nm = proj / "node_modules"
+    out = proj / "miniprogram_npm"
+    out.mkdir(exist_ok=True)
+    # 重建前清理孤儿包：miniprogram_npm 下已不在本次依赖列表的目录
+    # （只动本工具管理的构建产物目录，防止上次构建的残留混入运行时）
+    keep = set(deps)
+    for child in list(out.iterdir()):
+        if child.is_dir() and child.name not in keep:
+            import shutil as _sh
+            _sh.rmtree(child)
+            print(f"  - 清理孤儿包：{child.name}（已不在 dependencies）")
+    ok, fail = [], []
+    for pkg in deps:
+        src_pkg = nm / pkg
+        meta = src_pkg / "package.json"
+        if not meta.exists():
+            fail.append((pkg, "node_modules 中不存在（先 npm install）"))
+            continue
+        try:
+            m = _json.loads(meta.read_text(encoding="utf-8"))
+        except Exception as e:
+            fail.append((pkg, f"package.json 解析失败：{e}"))
+            continue
+        sub = m.get("miniprogram") or "."
+        src = src_pkg / sub if sub != "." else src_pkg
+        if not src.is_dir():
+            fail.append((pkg, f"miniprogram 字段指向的目录不存在：{sub}"))
+            continue
+        _copytree(src, out / pkg)
+        ok.append((pkg, sub))
+    print(f"构建完成：成功 {len(ok)} / 失败 {len(fail)}")
+    for pkg, sub in ok:
+        print(f"  ✓ {pkg:<28} ← {sub}")
+    for pkg, why in fail:
+        print(f"  ✗ {pkg:<28} {why}")
+    if fail:
+        return 1
+    print(f"\n产物：{out}")
+    print("（等价于开发者工具里的「工具 → 构建 npm」；TS 项目另需在 tsconfig.paths 指向 miniprogram_npm）")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="W1 · 微信小程序自动化（官方 SDK miniprogram-automator）")
@@ -247,6 +595,17 @@ def main() -> int:
 
     p3 = sub.add_parser("guide", help="打印完整操作指引")
     p3.set_defaults(fn=cmd_guide)
+
+    p4 = sub.add_parser("scaffold",
+                        help="生成专为 automator 测试设计的 TDesign 小程序项目")
+    p4.add_argument("--project", default=None, help="项目输出目录（默认状态目录下 demo_project）")
+    p4.add_argument("--force", action="store_true", help="目录非空时强制覆盖")
+    p4.set_defaults(fn=cmd_scaffold)
+
+    p5 = sub.add_parser("build-npm",
+                        help="按微信官方规则手动构建 miniprogram_npm（不依赖开发者工具）")
+    p5.add_argument("--project", required=True, help="小程序项目目录（含 package.json）")
+    p5.set_defaults(fn=cmd_build_npm)
 
     args = ap.parse_args()
     return args.fn(args)
