@@ -13,11 +13,39 @@ import json
 import os
 import random
 import re
+import string
+import sys
 import time
 import urllib.parse
 import urllib.robotparser
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# --------------------------------------------------------------------------- #
+# 输出编码：中文 Windows 下 stdout 被重定向时的必然崩溃点
+# --------------------------------------------------------------------------- #
+def _ensure_utf8_stdout() -> None:
+    """把 stdout/stderr 切成 UTF-8（幂等，永不抛）。
+
+    症状（实测：中文 Windows / chcp 936 / ``sys.stdout.encoding == 'gbk'``）：
+    只要 stdout 被管道或重定向（Agent 调用、CI、IDE、``| cat`` 都算），
+    ``print("✓ ...")`` 立刻
+    ``UnicodeEncodeError: 'gbk' codec can't encode character '\\u2713'``，
+    抓取已经成功却崩在打印阶段、退出码 1，会被误判成"环境坏了"。
+
+    修法刻意**不是**把 ✓ / ! / ✗ 降级成 ASCII —— 那会丢掉终端里一眼可读的
+    状态语义；而是把输出流本身改成 UTF-8（现代 Windows 终端与管道都能呈现）。
+    ``reconfigure`` 不存在的流（自定义包装、已关闭的流）静默跳过。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+_ensure_utf8_stdout()
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 
@@ -31,7 +59,7 @@ MAX_HTML_BYTES = int(os.environ.get("SAWT_MAX_HTML_BYTES") or 4_000_000)
 # 各层级语义（供文档与输出复用，单一事实来源）
 TIER_NAMES = {
     0: "T0 轻量直连 (curl_cffi)",
-    1: "T1 patchright (默认起步)",
+    1: "T1 patchright (JS 渲染/挑战)",
     2: "T2 强指纹浏览器 (cloakbrowser/camoufox)",
     3: "T3 需人工介入 (验证码/代理)",
 }
@@ -81,6 +109,10 @@ def new_result(url: str, *, tier: int, backend: str) -> dict:
         "error": None,
         "attempts": [],
         "fetched_at": now_iso(),
+        # 降级标记：后端不是最理想实现（如 T1 的 chrome 通道启动失败后回退
+        # patchright 自带 Chromium）时置 true + 原因，调用方可据此判断质量。
+        "degraded": False,
+        "degraded_reason": None,
     }
 
 
@@ -270,6 +302,83 @@ def short(s: str | None, n: int = 120) -> str:
         return ""
     s = re.sub(r"\s+", " ", str(s)).strip()
     return s[:n] + ("…" if len(s) > n else "")
+
+
+# --------------------------------------------------------------------------- #
+# 本机路径探测：盘符不能写死（用户可能装在任意盘）
+# --------------------------------------------------------------------------- #
+def existing_drives() -> list[str]:
+    """枚举本机**真实存在**的盘符根，形如 ``["C:/", "D:/"]``；非 Windows 返回空列表。
+
+    症状：老实现把候选写死成 ``C:/`` + ``D:/`` 两处，装在 ``E:``/``F:`` 盘的
+    微信开发者工具、微信客户端、小程序项目会被静默漏检（本机 E: 恰好在候选里，纯属运气）。
+    """
+    if os.name != "nt":
+        return []
+    out: list[str] = []
+    for ch in string.ascii_uppercase:
+        root = f"{ch}:/"
+        try:
+            if os.path.exists(root):
+                out.append(root)
+        except OSError:
+            continue
+    return out
+
+
+def program_roots() -> list[Path]:
+    """程序安装根目录候选：环境变量 + 每个存在盘符的 Program Files + 用户级 Programs。"""
+    roots: list[Path] = []
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        v = os.environ.get(env)
+        if v:
+            roots.append(Path(v))
+    for d in existing_drives():
+        roots.append(Path(d) / "Program Files")
+        roots.append(Path(d) / "Program Files (x86)")
+    roots.append(Path.home() / "AppData" / "Local" / "Programs")
+    dedup: list[Path] = []
+    for p in roots:
+        if p not in dedup:
+            dedup.append(p)
+    return dedup
+
+
+def wechat_devtools_homes() -> list[Path]:
+    """微信开发者工具的候选安装目录（跨盘符、去重、保序）。
+
+    CLI 所在位置随版本不同：3.x 在 ``cli.bat``，2.x 在 ``cli.js``，
+    路径可能是 ``<盘>:\\Program Files (x86)\\Tencent\\微信web开发者工具\\``。
+    """
+    subs = (Path("Tencent") / "微信web开发者工具", Path("微信web开发者工具"))
+    out: list[Path] = []
+    for root in program_roots():
+        for sub in subs:
+            p = root / sub
+            if p not in out:
+                out.append(p)
+    # 公共文档目录同样不写死盘符：PUBLIC 环境变量才是权威（可能不在 C:）
+    pub_root = Path(os.environ.get("PUBLIC") or "C:/Users/Public")
+    pub = pub_root / "Documents" / "微信web开发者工具"
+    if pub not in out:
+        out.append(pub)
+    return out
+
+
+def wechat_client_candidates() -> list[Path]:
+    """微信客户端 exe 候选：3.x 为 ``WeChat.exe``，4.x 改名 ``Weixin.exe``。"""
+    rels = (
+        Path("Tencent") / "WeChat" / "WeChat.exe",
+        Path("Tencent") / "Weixin" / "Weixin.exe",
+        Path("Weixin") / "Weixin.exe",
+    )
+    out: list[Path] = []
+    for root in program_roots():
+        for rel in rels:
+            p = root / rel
+            if p not in out:
+                out.append(p)
+    return out
 
 
 # --------------------------------------------------------------------------- #

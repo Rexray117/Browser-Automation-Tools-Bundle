@@ -70,8 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "等太短会把'慢放行'误报成'被拦'")
     p.add_argument("--min-interval", type=float, default=1.0,
                    help="同域最小请求间隔秒（默认 1.0）")
-    p.add_argument("--min-text", type=int, default=200,
-                   help="内容下限（字符）。低于此值视为'内容未完整下发'并触发升级（默认 200）")
+    p.add_argument("--min-text", type=int, default=80,
+                   help="内容下限（字符）。低于此值视为'内容未完整下发'并触发升级"
+                        "（默认 80；须≥80，否则 example.com 这类 156 字符的短页会被误判为空页）")
     p.add_argument("--slow-ms", type=int, default=None,
                    help="响应过慢阈值（毫秒），超过即视为被限速并升级。"
                         "显式指定后不再使用相对基线")
@@ -166,6 +167,13 @@ def fetch_one(url: str, args, limiter: DomainRateLimiter,
             start = int(prof.get("preferred_tier") or 0)
             if start:
                 print(f"  画像：{dom} 上次走通 {TIER_NAMES[start]}，从该层起步", file=sys.stderr)
+
+    # 画像记忆的起跳层可能高于本次 --max-tier（例如记忆里是 T2，这次限制到 T1）：
+    # 不裁剪就会得到空候选链 + no_backend_available，看着像"依赖没装"，其实是自相矛盾。
+    if start > args.max_tier:
+        print(f"  画像记录的起跳层 {TIER_NAMES[start]} 高于 --max-tier "
+              f"{TIER_NAMES[args.max_tier]}，按 max-tier 起步", file=sys.stderr)
+        start = args.max_tier
 
     chain = tier_chain(start, args.max_tier, args)
     attempts: list[dict] = []
@@ -328,6 +336,8 @@ def print_human(res: dict, args) -> None:
         print(f"标题     : {res['title']}")
     if res.get("blocked"):
         print(f"拦截     : {res.get('block_vendor')} — {res.get('block_reason')}")
+    if res.get("degraded"):
+        print(f"⚠ 降级   : {res.get('degraded_reason')}")
     if res.get("soft_limited"):
         reasons = "/".join(res.get("soft_reasons") or []) or "soft-limit"
         print(f"⚠ 软限制 : {reasons} —— 拿到内容但可能不完整，已尝试升级")

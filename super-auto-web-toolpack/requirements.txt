@@ -7,13 +7,16 @@
 #
 # T2 浏览器二进制需在装完包后单独下载（体积大）：
 #   python -c "import cloakbrowser; cloakbrowser.ensure_binary()"   # ~536 MB
-#   python -m camoufox fetch                                        # ~2.5 GB（实测）
+#   python -m camoufox fetch                    # 下载 ~200 MB；解压后约 1–2.5 GB（视平台）
 
 # ---- 网页层 · 必备（T0 + T1）----
 curl_cffi==0.16.3          # T0：TLS/JA3 指纹直连
 patchright==1.63.0         # T1：补丁版 Playwright（独立包，不与原版 playwright 冲突）
                            # 装后执行：python -m patchright install chromium
                            # （或复用系统 Chrome：channel="chrome"，免下载）
+                           # ⚠ 系统 Chrome 版本代差时 channel="chrome" 会启动失败
+                           #（ProcessSingleton / Crashpad 0x5），fetch 会自动回退
+                           # Chromium 并在结果里标 degraded=true
 
 # ---- 网页层 · T2 重武器（可选）----
 cloakbrowser==0.6.1        # Chromium 146 源码级补丁；二进制带 Ed25519 签名校验

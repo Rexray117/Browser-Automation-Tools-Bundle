@@ -4,18 +4,21 @@
 层级与后端
 ----------
 T0  curl_cffi                     TLS/JA3 + HTTP2 指纹伪装，无浏览器，~200ms
-T1  patchright                    补丁版 Playwright（Chromium），默认起步层
+T1  patchright                    补丁版 Playwright（Chromium），JS 渲染/挑战层
 T2  cloakbrowser / camoufox       源码级指纹浏览器（C++ 补丁 / Firefox fork）
 T3  manual                        需人工介入（验证码、登录态、代理）
+
+编排默认 **从 T0 起步**，按 detect 判定的信号（403/429/挑战页/需 JS）逐级升到 T1/T2。
 """
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
 from _common import (STATE_DIR, TIER_NAMES, html_to_text, extract_title,
-                     new_result, truncate)
+                     new_result, program_roots, short, truncate)
 import detect as _detect
 
 DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -32,8 +35,80 @@ _CHROME_CANDIDATES = [
 ]
 
 
+def chrome_exe() -> Path | None:
+    """返回系统 Chrome 的可执行文件路径（非 C: 盘安装也能找到）。"""
+    cands = [Path(p) for p in _CHROME_CANDIDATES if p]
+    for root in program_roots():
+        cands.append(root / "Google" / "Chrome" / "Application" / "chrome.exe")
+    for p in cands:
+        try:
+            if p.exists():
+                return p
+        except OSError:
+            continue
+    return None
+
+
 def chrome_present() -> bool:
-    return any(Path(p).exists() for p in _CHROME_CANDIDATES if p)
+    return chrome_exe() is not None
+
+
+def chrome_version() -> str | None:
+    """读系统 Chrome 版本号（4 段版本，如 ``156.0.7600.0``）。
+
+    三种来源按可靠性排序，任一命中即返回：
+    1. 注册表 ``HKCU\\Software\\Google\\Chrome\\BLBeacon`` 的 ``version``；
+       Chrome 正在运行时 ``chrome --version`` 会被已有进程吞掉、什么都不打印。
+    2. ``chrome --version`` 的 stdout/stderr（Chrome 未运行时最直接）。
+    3. 安装目录下的 ``Application\\<版本>\\`` 子目录名（兜底，永远存在）。
+    """
+    def _from_registry() -> str | None:
+        if os.name != "nt":
+            return None
+        try:
+            import winreg
+        except Exception:
+            return None
+        key = r"Software\Google\Chrome\BLBeacon"
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root, key) as k:
+                    val = str(winreg.QueryValueEx(k, "version")[0])
+            except OSError:
+                continue
+            if re.fullmatch(r"\d+(?:\.\d+){2,3}", val):
+                return val
+        return None
+
+    def _from_install_dir(exe: Path) -> str | None:
+        try:
+            names = [
+                p.name for p in exe.parent.iterdir()
+                if p.is_dir() and re.fullmatch(r"\d+(?:\.\d+){2,3}", p.name)
+            ]
+        except OSError:
+            return None
+        if not names:
+            return None
+        return sorted(names, key=lambda s: [int(x) for x in s.split(".")])[-1]
+
+    v = _from_registry()
+    if v:
+        return v
+    exe = chrome_exe()
+    if exe is None:
+        return None
+    try:
+        import subprocess
+        out = subprocess.run(
+            [str(exe), "--version"], capture_output=True, text=True, timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        m = re.search(r"\d+(?:\.\d+){2,3}", (out.stdout or "") + (out.stderr or ""))
+        if m:
+            return m.group(0)
+    except Exception:
+        pass
+    return _from_install_dir(exe)
 
 
 def _camoufox_ready() -> bool:
@@ -82,13 +157,17 @@ def backend_available(backend: str) -> tuple[bool, str]:
 
 
 def _finalize(res: dict, *, status, html, title=None, text=None,
-              min_text_len: int = 200, start_ts: float | None = None,
-              slow_ms: int = 0, empty_floor: int = 200) -> dict:
+              min_text_len: int = 80, start_ts: float | None = None,
+              slow_ms: int = 0, empty_floor: int = 80) -> dict:
     """统一收尾：抽文本 → 抽标题 → 跑硬拦截检测 → 跑软限制检测。
 
     注意两套阈值的语义区别（混用会导致误报）：
       * ``empty_floor``（硬）：低于此值 = "根本没取到内容"，固定低阈值
       * ``min_text_len``（软，对应用户的 --min-text）：低于此值 = "取到了但不够多"
+
+    默认值统一为 **80**（原为 200）：``https://example.com`` 正文只有 156 字符，
+    用 200 当阈值会把它判成"未取到内容"并 exit 2 —— 短页（示例站、lite 站、
+    单条详情页）会被大面积误杀。真·空页面在 80 以下依然能识别出来。
     """
     res["status"] = status
     res["html"] = truncate(html)
@@ -205,7 +284,7 @@ def _safe_content(page, retries: int = 4, settle_ms: int = 900) -> str:
 # --------------------------------------------------------------------------- #
 def fetch_curl_cffi(url: str, *, timeout: float = 30.0, impersonate: str = "chrome",
                     proxy: str | None = None, headers: dict | None = None,
-                    min_text_len: int = 200, slow_ms: int | None = None) -> dict:
+                    min_text_len: int = 80, slow_ms: int | None = None) -> dict:
     res = new_result(url, tier=0, backend="curl_cffi")
     t0 = time.time()
     try:
@@ -231,7 +310,7 @@ def fetch_curl_cffi(url: str, *, timeout: float = 30.0, impersonate: str = "chro
 
 
 # --------------------------------------------------------------------------- #
-# T1 · patchright（默认起步层）
+# T1 · patchright（JS 渲染/挑战层，由编排按信号从 T0 升上来）
 # --------------------------------------------------------------------------- #
 def _patchright_launch(p, *, headless: bool, channel: str, proxy: str | None,
                        user_data_dir: str | None, no_viewport: bool = True):
@@ -241,8 +320,14 @@ def _patchright_launch(p, *, headless: bool, channel: str, proxy: str | None,
       - 用 launch_persistent_context，并启用 no_viewport
       - 优先 channel="chrome"（真实 Chrome 比 Chromium 更不易被识别）
       - **不要**自定义 UA / 额外 header，否则反而增加指纹熵
+
+    profile 目录按通道分开：chrome 启动失败会在 user_data_dir 里留下
+    ``SingletonLock`` / ``Crashpad\\settings.dat``，若回退 chromium 还复用同一目录，
+    重试会继续报 ``拒绝访问 0x5`` / ProcessSingleton —— 回退等于没修好。
     """
-    udd = user_data_dir or str(STATE_DIR / "profiles" / "patchright")
+    udd = user_data_dir or str(
+        STATE_DIR / "profiles" /
+        ("patchright-chromium" if channel == "chromium" else "patchright"))
     Path(udd).mkdir(parents=True, exist_ok=True)
     kwargs = dict(user_data_dir=udd, headless=headless, no_viewport=no_viewport)
     if proxy:
@@ -255,7 +340,7 @@ def _patchright_launch(p, *, headless: bool, channel: str, proxy: str | None,
 def fetch_patchright(url: str, *, headless: bool = False, channel: str = "auto",
                      timeout_ms: int = 45000, wait_ms: int = 2500,
                      proxy: str | None = None, user_data_dir: str | None = None,
-                     min_text_len: int = 200, slow_ms: int | None = None,
+                     min_text_len: int = 80, slow_ms: int | None = None,
                      challenge_wait_ms: int = 15_000,
                      **_ignored) -> dict:
     res = new_result(url, tier=1, backend="patchright")
@@ -268,17 +353,25 @@ def fetch_patchright(url: str, *, headless: bool = False, channel: str = "auto",
 
     ch = "chrome" if (channel == "auto" and chrome_present()) else \
          ("chromium" if channel == "auto" else channel)
+    fallback_reason: str | None = None
     ctx = None
     try:
         with sync_playwright() as p:
             try:
                 ctx = _patchright_launch(p, headless=headless, channel=ch, proxy=proxy,
                                          user_data_dir=user_data_dir)
-            except Exception:
-                if ch == "chrome":       # 回退到 Chromium
+            except Exception as e:
+                if ch == "chrome":
+                    # 已知坑：系统 Chrome 与 patchright 版本有代差（如 Chrome 156
+                    # vs patchright 1.63.0）时启动必失败
+                    # （Failed to create a ProcessSingleton / Crashpad 拒绝访问 0x5）。
+                    # 这里回退自带 Chromium，但必须把"降级"如实报出去，不能只改个 backend 名。
+                    fallback_reason = short(f"{type(e).__name__}: {e}", 240)
                     ch = "chromium"
                     ctx = _patchright_launch(p, headless=headless, channel=ch,
-                                             proxy=proxy, user_data_dir=user_data_dir)
+                                             proxy=proxy,
+                                             user_data_dir=(f"{user_data_dir}-chromium"
+                                                            if user_data_dir else None))
                 else:
                     raise
             page = ctx.new_page()
@@ -303,13 +396,18 @@ def fetch_patchright(url: str, *, headless: bool = False, channel: str = "auto",
     except Exception as e:
         res["error"] = f"{type(e).__name__}: {e}"
         if "Executable doesn't exist" in str(e) or "playwright install" in str(e):
-            res["error"] += "  → 需执行：patchright install chromium（或 install chrome）"
+            res["error"] += "  → 需执行：python -m patchright install chromium"
     finally:
         try:
             if ctx:
                 ctx.close()
         except Exception:
             pass
+    if fallback_reason:
+        res["degraded"] = True
+        res["degraded_reason"] = (
+            "chrome 通道启动失败，已回退 patchright 自带 Chromium（反检测能力略弱）；"
+            f"原因：{fallback_reason}")
     res["elapsed_ms"] = int((time.time() - t0) * 1000)
     return res
 
@@ -321,7 +419,7 @@ def fetch_cloakbrowser(url: str, *, headless: bool = False, humanize: bool = Tru
                        timeout_ms: int = 45000, wait_ms: int = 2500,
                        proxy: str | None = None, geoip: bool = False,
                        timezone: str | None = None, locale: str | None = None,
-                       min_text_len: int = 200, slow_ms: int | None = None,
+                       min_text_len: int = 80, slow_ms: int | None = None,
                        challenge_wait_ms: int = 15_000,
                        **_ignored) -> dict:
     res = new_result(url, tier=2, backend="cloakbrowser")
@@ -372,7 +470,7 @@ def fetch_cloakbrowser(url: str, *, headless: bool = False, humanize: bool = Tru
 def fetch_camoufox(url: str, *, headless: bool = False, timeout_ms: int = 45000,
                    wait_ms: int = 2500, proxy: str | None = None,
                    humanize: bool = True, geoip: bool = False,
-                   min_text_len: int = 200, slow_ms: int | None = None,
+                   min_text_len: int = 80, slow_ms: int | None = None,
                    challenge_wait_ms: int = 15_000,
                    **_ignored) -> dict:
     res = new_result(url, tier=2, backend="camoufox")

@@ -32,7 +32,8 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import STATE_DIR, now_iso  # noqa: E402
+from _common import (STATE_DIR, existing_drives, now_iso,  # noqa: E402
+                     wechat_devtools_homes)
 
 # 加密包魔数（微信新版 4.x）
 MP_MAGIC_ENCRYPTED = b"V1MMWX"
@@ -52,8 +53,14 @@ def _roots() -> list[Path]:
             if (uid / "applet").is_dir():
                 out.append(uid / "applet")
 
-    # 3.x：WeChat Files\Applet
-    for base in (home / "Documents", Path("D:/Documents"), Path("E:/Documents")):
+    # 3.x：WeChat Files\Applet（文档目录可能在任意盘，不写死 C:/D:/E:）
+    bases = [home / "Documents"] + [Path(d) / "Documents" for d in existing_drives()]
+    seen: set[str] = set()
+    for base in bases:
+        key = str(base).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         wf = base / "WeChat Files"
         if wf.is_dir():
             for uid in sorted(wf.iterdir()):
@@ -226,13 +233,8 @@ def print_report(roots: list[Path], apps: dict, aux: dict) -> None:
 
 
 def _devtools_present() -> bool:
-    cands = [
-        Path("C:/Program Files (x86)/Tencent/微信web开发者工具"),
-        Path("C:/Program Files/Tencent/微信web开发者工具"),
-        Path("D:/Program Files (x86)/Tencent/微信web开发者工具"),
-        Path("D:/Program Files/Tencent/微信web开发者工具"),
-    ]
-    return any(c.is_dir() for c in cands)
+    """开发者工具是否装了 —— 扫本机所有存在的盘符，而不是只认 C:/D:。"""
+    return any(c.is_dir() for c in wechat_devtools_homes())
 
 
 def main() -> int:

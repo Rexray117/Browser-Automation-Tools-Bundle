@@ -15,7 +15,7 @@ python -m venv .venv
 # T0（必装，小）
 pip install curl_cffi
 
-# T1（必装，默认起步层）
+# T1（必装，JS 渲染/挑战层）
 pip install patchright
 python -m patchright install chromium     # 下载 Chromium（约 150MB）
 # 或直接复用系统 Chrome（更推荐，见下）
@@ -25,7 +25,7 @@ pip install cloakbrowser
 python -c "import cloakbrowser; cloakbrowser.ensure_binary()"   # 下载二进制 ~536MB
 
 pip install camoufox
-python -m camoufox fetch                                        # 下载 Firefox 构建 ~200MB
+python -m camoufox fetch                                        # 下载 ~200MB（解压后含依赖约 1–2.5GB）
 ```
 
 依赖全部来自 **PyPI 官方源**，不涉及任何第三方镜像或 git 源。
@@ -54,7 +54,7 @@ r = creq.get("https://example.com", impersonate="chrome", timeout=30)
 
 ---
 
-## 三、T1 · patchright（默认起步层）
+## 三、T1 · patchright（JS 渲染/挑战层，由编排按信号从 T0 升上来）
 
 patchright 是**打过补丁的 Playwright**，用来消掉 Playwright 的自动化痕迹。它"换 import 即用"。
 
@@ -147,7 +147,7 @@ with Camoufox(headless=True) as browser:
 - 为什么这重要：多数反检测方案靠 JS 覆写 `navigator.webdriver` 等属性，而**"属性被改过"本身就是信号**（风控会检测原生属性是否被篡改）。Camoufox 从 C++ 层改，JS 侧看不到痕迹
 - **每次启动随机化身份**：实测两次运行分别报为 `Linux x86_64 / Firefox 156` 与 `Windows NT 10.0 / Firefox 156`，WebGL 厂商也随之变化
 - **没有 `window.chrome`** —— 这是正常的（它是 Firefox，不是 Chromium）。用 `stealth_check.py` 自检时该项会自动跳过
-- 需先 `python -m camoufox fetch` 下载，**实测体积约 2.5GB**（含 Firefox 构建 + UBO 广告拦截插件 + fpgen 指纹模型）
+- 需先 `python -m camoufox fetch` 下载，**下载约 200MB；解压后连同 Firefox 构建 + UBO 广告拦截插件 + fpgen 指纹模型约 1–2.5GB（本机实测 2.5GB，视平台）**
 - ⚠️ 作者自标"**开发中，可能不适合稳定生产使用**"；许可为 **MPL-2.0**（弱 copyleft）
 
 **实测战绩**：bot.sannysoft.com **56 通过 / 1 失败**——唯一失败项是 "Chrome (New) missing"，属 Chrome 专属项，对 Firefox 不构成实际问题。
@@ -195,7 +195,7 @@ python scripts/stealth_check.py --headless         # 对比无头模式的暴露
 | curl_cffi | 无（纯 Python wheel） | PyPI | ~10MB |
 | patchright + chromium | ~150MB | Playwright CDN | 或用系统 Chrome 免下载 |
 | **cloakbrowser** | **537MB**（实测） | `cloakbrowser.dev` → GitHub Release CDN | 免费档 tier=free 可用；二进制带 Ed25519 签名校验；实测下载 57s |
-| **camoufox** | **约 2.5GB**（实测，远不止浏览器本体） | GitHub Release CDN | 含 Firefox 构建 + UBO 广告拦截插件 + fpgen 指纹模型 |
+| **camoufox** | **下载约 200MB；解压后约 1–2.5GB**（实测 2.5GB，远不止浏览器本体） | GitHub Release CDN | 含 Firefox 构建 + UBO 广告拦截插件 + fpgen 指纹模型 |
 
 ### ⚠️ 下载源可能被拦截 —— 用代理解决
 

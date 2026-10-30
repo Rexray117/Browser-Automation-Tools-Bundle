@@ -13,6 +13,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _common import _ensure_utf8_stdout  # noqa: E402
+
+# detect.py 自身不 import _common，这里必须显式切 UTF-8 —— 否则中文 Windows 下
+# 只要 stdout 被管道/重定向，第一个 "✓" 就抛
+# UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'。
+_ensure_utf8_stdout()
 import detect as D  # noqa: E402
 
 NORMAL = """<!doctype html><html><head><title>Quotes to Scrape</title></head><body>

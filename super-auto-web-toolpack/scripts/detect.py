@@ -163,7 +163,7 @@ SOFT_SIGNATURES: list[tuple[str, str, list[str], str]] = [
 
 def detect_soft_limit(*, status: int | None, html: str | None, text: str | None,
                       title: str | None = None, elapsed_ms: int | None = None,
-                      min_text_len: int = 200, slow_ms: int = 0) -> DetectResult:
+                      min_text_len: int = 80, slow_ms: int = 0) -> DetectResult:
     """软限制判定：站点不拒绝你，但"少给"。
 
     触发升级的三种情形：
@@ -278,7 +278,7 @@ def _scan(patterns: list[str], haystack: str) -> str | None:
 
 
 def detect_block(*, status: int | None, html: str | None, text: str | None,
-                 title: str | None = None, min_text_len: int = 200) -> DetectResult:
+                 title: str | None = None, min_text_len: int = 80) -> DetectResult:
     """对一次抓取结果做拦截判定。html/text 传原始内容。"""
     res = DetectResult()
     head = (html or "")[:20000]                      # 只扫开头，挑战页特征都在前部
@@ -377,3 +377,70 @@ def should_escalate(d: DetectResult, *, current_tier: int, max_tier: int) -> tup
     if d.empty_content:
         return True, "内容为空/未渲染——需要浏览器层执行 JS"
     return True, f"命中 {d.vendor or '未知拦截'}，尝试升级"
+
+
+# --------------------------------------------------------------------------- #
+# 最小 CLI：本文件原本是纯库（import 进来什么都跑不了），给个可用的自检入口
+#   python detect.py --file page.html --status 403 --json   # 退出码 0=判定被拦
+#   type page.html | python detect.py -                     # 从 stdin 读
+# --------------------------------------------------------------------------- #
+def _cli() -> int:
+    import argparse
+    import json
+    import sys
+    from pathlib import Path
+
+    # 本文件是独立库（不 import _common），这里自备一份 UTF-8 输出保护：
+    # 中文 Windows 下 stdout 被管道/重定向时默认 gbk，中文 reason 会直接
+    # UnicodeEncodeError。与 _common._ensure_utf8_stdout 同口径。
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+    ap = argparse.ArgumentParser(description="反爬/拦截信号检测（读本地 HTML 或 stdin）")
+    ap.add_argument("--file", default="-", help="HTML 文件路径；默认 - 表示从 stdin 读")
+    ap.add_argument("--status", type=int, default=None, help="HTTP 状态码")
+    ap.add_argument("--title", default=None, help="页面标题（可选）")
+    ap.add_argument("--min-text", type=int, default=80, help="内容下限字符（默认 80）")
+    ap.add_argument("--json", action="store_true", help="输出 JSON 画像")
+    args = ap.parse_args()
+
+    if args.file == "-":
+        buf = getattr(sys.stdin, "buffer", None)
+        raw = buf.read() if buf is not None else sys.stdin.read().encode("utf-8")
+        try:
+            html = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            html = raw.decode("gbk", errors="replace")
+    else:
+        html = Path(args.file).read_text(encoding="utf-8", errors="replace")
+
+    # 与 _common.html_to_text 的兜底分支同口径：去 script/style/注释后压空白
+    body = re.sub(r"(?is)<(script|style|noscript|template|svg|head)\b[^>]*>.*?</\1>", " ", html)
+    body = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body)).strip()
+
+    d = detect_block(status=args.status, html=html, text=body,
+                     title=args.title, min_text_len=args.min_text)
+    if args.json:
+        print(json.dumps({
+            "blocked": d.blocked, "vendor": d.vendor, "reason": d.reason,
+            "confidence": round(d.confidence, 3), "rate_limited": d.rate_limited,
+            "login_wall": d.login_wall, "empty_content": d.empty_content,
+            "soft": d.soft, "soft_reasons": d.soft_reasons, "signals": d.signals,
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(f"blocked      : {d.blocked}")
+        print(f"vendor       : {d.vendor or '-'}")
+        print(f"reason       : {d.reason or '-'}")
+        print(f"confidence   : {d.confidence:.2f}")
+        print(f"rate_limited : {d.rate_limited}    empty_content: {d.empty_content}"
+              f"    soft: {d.soft}")
+        if d.signals:
+            print("signals      : " + "; ".join(d.signals))
+    return 0 if d.blocked else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli())

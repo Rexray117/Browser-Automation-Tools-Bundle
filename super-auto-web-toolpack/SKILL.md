@@ -1,9 +1,9 @@
 ---
 name: super-auto-web-toolpack
-description: "分层网页与小程序数据抓取工具包。网页按成本递增自动升级反爬对抗等级：T0 curl_cffi（TLS/JA3 指纹直连）→ T1 patchright（补丁版 Playwright，默认起步层）→ T2 强指纹浏览器（cloakbrowser / camoufox）；硬拦截（Cloudflare/DataDome/Akamai/五秒盾）与软限制（内容降级、需 JS、响应过慢）均触发升级。微信小程序单列 W 层：W0 包盘点（只读）→ W1 官方 SDK miniprogram-automator → W2 MITM 抓包（mitmproxy，含凭据脱敏）→ W3 反编译适配与静态接口提取。内置反爬信号检测、站点画像记忆、同域限速、robots.txt 预检、耗时相对基线。当需要抓取网页数据、被反爬拦截、页面需 JS 渲染、被限流、返回内容不完整、或数据在微信小程序（wx.request 接口）里时使用。"
+description: "分层网页与小程序数据抓取工具包。网页按成本递增自动升级反爬对抗等级：T0 curl_cffi（TLS/JA3 指纹直连，默认从这层起步）→ T1 patchright（补丁版 Playwright，JS 渲染/挑战层）→ T2 强指纹浏览器（cloakbrowser / camoufox）；硬拦截（Cloudflare/DataDome/Akamai/五秒盾）与软限制（内容降级、需 JS、响应过慢）均触发升级。微信小程序单列 W 层：W0 包盘点（只读）→ W1 官方 SDK miniprogram-automator → W2 MITM 抓包（mitmproxy，含凭据脱敏）→ W3 反编译适配与静态接口提取。内置反爬信号检测、站点画像记忆、同域限速、robots.txt 预检、耗时相对基线。当需要抓取网页数据、被反爬拦截、页面需 JS 渲染、被限流、返回内容不完整、或数据在微信小程序（wx.request 接口）里时使用。"
 display_name: "Super auto-web toolpack"
 display_name_en: "Super auto-web toolpack"
-version: 2.0.0
+version: 2.0.1
 agent_created: true
 license: MIT
 tags: [web-scraping, scraping, crawler, anti-bot, patchright, curl_cffi, cloakbrowser, camoufox, cloudflare, data-extraction, miniprogram, wechat, wxapkg, mitmproxy, 网页抓取, 爬虫, 反爬, 数据采集, 分层降级, 微信小程序, 抓包, 反编译, super-auto-web-toolpack]
@@ -15,12 +15,14 @@ tags: [web-scraping, scraping, crawler, anti-bot, patchright, curl_cffi, cloakbr
 
 | 层级 | 手段 | 能耗掉什么防护 | 成本 | 默认 |
 |---|---|---|---|---|
-| **T0** | `curl_cffi`（TLS/JA3 + HTTP2 指纹伪装） | 无防护站、JA3 指纹校验 | ~0.2–1s | 起跳层 |
-| **T1** | `patchright`（补丁版 Playwright + 真实 Chrome） | JS 挑战、无头检测、动态渲染 | 5–8s | **默认起步层** |
+| **T0** | `curl_cffi`（TLS/JA3 + HTTP2 指纹伪装） | 无防护站、JA3 指纹校验 | ~0.2–1s | **默认起步层** |
+| **T1** | `patchright`（补丁版 Playwright + 真实 Chrome） | JS 挑战、无头检测、动态渲染 | 5–8s | 检测到信号才升上来 |
 | **T2** | `cloakbrowser` / `camoufox`（源码级指纹） | DataDome / 强指纹站点 | 5–20s | 按需 |
 | **T3** | 人工介入（验证码 / 登录态 / 代理） | — | — | 报告给用户 |
 
 > **设计要点**：T0 是"免费试探"，T1 是"主力"，T2 是"重武器"。不无脑上重武器，才是"不引起反爬"的工程解法。
+> **默认从 T0 起步**，只有 T0 命中拦截/需 JS/内容不足时才按 cost 递增升到 T1、T2；
+> 想跳过试探可直接 `--start-tier 1`（或 `--start-tier 2`）。
 
 ### W 层：微信小程序（另一套技术栈）
 
@@ -93,13 +95,13 @@ pip install cloakbrowser              # 或 pip install camoufox
 
 # 第二步：下载各自改造过的浏览器二进制（关键，且体积很大）
 python -c "import cloakbrowser; cloakbrowser.ensure_binary()"   # ~536 MB
-python -m camoufox fetch                                        # ~200 MB
+python -m camoufox fetch                                        # 下载 ~200 MB
 ```
 
 | 后端 | 二进制体积 | 下载源 |
 |---|---|---|
 | cloakbrowser | **约 536 MB** | `cloakbrowser.dev` → GitHub Release CDN |
-| camoufox | 约 200 MB | GitHub Release CDN |
+| camoufox | 下载约 200 MB；解压后含依赖约 1–2.5 GB（视平台） | GitHub Release CDN |
 
 > ⚠️ **网络受限环境注意**：二进制走 GitHub Release 资产 CDN（`release-assets.githubusercontent.com`）。
 > 若该域名被代理/防火墙拦截，下载会**卡住不动**（表现为速度几百 B/s）。
@@ -138,7 +140,7 @@ python <SKILL_DIR>/scripts/fetch.py --urls-file urls.txt [选项]
 | 已知是静态站，省时间 | `fetch.py "<URL>" --only-tier 0` |
 | 强制从 T1 起步 | `fetch.py "<URL>" --start-tier 1` |
 | 内容必须含某关键词 | `fetch.py "<URL>" --require "关键词"` |
-| 内容下限（低于即升级） | `fetch.py "<URL>" --min-text 2000` |
+| 内容下限（低于即升级） | `fetch.py "<URL>" --min-text 2000`（**默认 80**，短页不会误判为空） |
 | 响应过慢即升级（固定阈值） | `fetch.py "<URL>" --slow-ms 8000` |
 | 调松/收紧判慢倍数 | `fetch.py "<URL>" --slow-factor 5` |
 | 查看耗时基线 | `fetch.py --baselines` |
@@ -254,3 +256,12 @@ python <SKILL_DIR>/scripts/fetch.py --urls-file urls.txt [选项]
 | `mp_automator/` | W1 自动化脚本工作区（Node 项目） |
 
 > 站点画像让重复抓取免去"每次从 T0 重试"。若某站突然开始拦截，删除对应域名条目即可回到从 T0 起跳。
+
+## 变更记录
+
+- **2.0.1**：管道/重定向下不再因 GBK 控制台抛 `UnicodeEncodeError`（`_common._ensure_utf8_stdout()`，独立脚本 `stealth_check.py`/`detect.py` 各自内联）；
+  `doctor.py` 对 T1 chrome 通道改做真实启动探测（临时 profile + UA + close），失败时明确提示“抓取自动回退 patchright 自带 Chromium，结果标 `degraded`”；
+  `tiers.py` 回退时按通道分离 profile 目录（避免 chrome 残留 SingletonLock 让回退继续 0x5）并在结果里写 `degraded/degraded_reason`；
+  `chrome_version()` 改为注册表 → `chrome --version` → `Application\<版本>\` 三级来源（原实现恒返回 None）；
+  `--min-text` 默认 200 → 80（example.com 仅 156 字符，会被误判空页）；盘符枚举改 A–Z 探测（不再写死 C:/D:）；
+  `detect.py` 补 `__main__` CLI；画像起跳层高于 `--max-tier` 时按 max-tier 起步而不再空候选链退出。

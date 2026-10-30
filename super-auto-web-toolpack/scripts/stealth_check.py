@@ -20,6 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import tiers as _tiers  # noqa: E402
+from _common import _ensure_utf8_stdout, short  # noqa: E402
+
+# 本脚本最小可独立运行：显式切换 UTF-8，避免中文 Windows 下 `| cat` / 重定向时
+# 在 ✓ ✗ 上抛 UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'。
+_ensure_utf8_stdout()
 
 PROBE_JS = r"""
 () => {
@@ -70,6 +75,10 @@ CHECKS = [
 
 CHROMIUM_BACKENDS = {"patchright", "cloakbrowser"}
 
+# chrome 通道失败回退 chromium 时记一条，最终写进 JSON —— 否则调用方只看到
+# backend="patchright"，会误以为测的就是真实 Chrome 通道。
+DEGRADATIONS: list[str] = []
+
 
 def judge(key: str, value, expect) -> tuple[bool, str]:
     if callable(expect):
@@ -86,8 +95,21 @@ def open_session(backend: str, *, headless: bool, proxy: str | None = None):
         from patchright.sync_api import sync_playwright
         ch = "chrome" if _tiers.chrome_present() else "chromium"
         with sync_playwright() as p:
-            ctx = _tiers._patchright_launch(p, headless=headless, channel=ch,
-                                            proxy=proxy, user_data_dir=None)
+            try:
+                ctx = _tiers._patchright_launch(p, headless=headless, channel=ch,
+                                                proxy=proxy, user_data_dir=None)
+            except Exception as e:
+                if ch != "chrome":
+                    raise
+                # 已知坑：系统 Chrome 与 patchright 版本代差时 channel=chrome 必失败
+                # （ProcessSingleton / Crashpad settings.dat 0x5）。回退 chromium，
+                # 并把原因打出来 —— 不要让用户看到 playwright 的原始栈去猜。
+                ch = "chromium"
+                reason = f"chrome 通道启动失败，已回退 chromium：{short(str(e), 200)}"
+                DEGRADATIONS.append(reason)
+                print(f"[!] {reason}", file=sys.stderr)
+                ctx = _tiers._patchright_launch(p, headless=headless, channel=ch,
+                                                proxy=proxy, user_data_dir=None)
             try:
                 yield ctx.new_page()
             finally:
@@ -187,6 +209,9 @@ def main() -> int:
 
     out = {"backend": args.backend, "headless": args.headless,
            "local_checks_failed": fails, "probe": data}
+    if DEGRADATIONS:
+        out["degraded"] = True
+        out["degraded_reason"] = "；".join(DEGRADATIONS)
 
     if args.sannysoft:
         print("=" * 68)
@@ -216,6 +241,9 @@ def main() -> int:
               "仍不过则考虑升级到 T2（cloakbrowser / camoufox）。")
     if not is_chromium:
         print("注：camoufox 走 Firefox 路线，与 Chromium 系的检测项不完全通用。")
+    if DEGRADATIONS:
+        print("[!] 注意：本次 chrome 通道不可用，实际测的是 patchright 自带 Chromium"
+              "（反检测能力略弱于真实 Chrome）。")
     if args.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
     return 0 if fails == 0 else 2

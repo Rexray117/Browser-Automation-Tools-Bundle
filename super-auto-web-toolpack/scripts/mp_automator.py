@@ -38,18 +38,12 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import STATE_DIR, now_iso  # noqa: E402
+from _common import STATE_DIR, now_iso, wechat_devtools_homes  # noqa: E402
 
 AUTOMATOR_DIR = STATE_DIR / "mp_automator"
 
-# 微信开发者工具 CLI 的相对路径候选（cli.bat / cli）
-DEVTOOLS_HOMES = [
-    Path("C:/Program Files (x86)/Tencent/微信web开发者工具"),
-    Path("C:/Program Files/Tencent/微信web开发者工具"),
-    Path("D:/Program Files (x86)/Tencent/微信web开发者工具"),
-    Path("D:/Program Files/Tencent/微信web开发者工具"),
-    Path("C:/Users/Public/Documents/微信web开发者工具"),
-]
+# 微信开发者工具 CLI 的候选安装目录（cli.bat / cli）：跨全部存在盘符，盘符不写死
+DEVTOOLS_HOMES = wechat_devtools_homes()
 
 NODE_SCRIPT = r"""// 微信小程序自动化脚本（由 super-auto-web-toolpack 生成）
 // 依赖： npm i miniprogram-automator

@@ -7,12 +7,16 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _common import STATE_DIR, PROFILE_FILE, LatencyBaseline, load_profiles  # noqa: E402
+from _common import (STATE_DIR, PROFILE_FILE, LatencyBaseline, load_profiles,  # noqa: E402
+                     short, wechat_client_candidates, wechat_devtools_homes)
 import tiers as _tiers  # noqa: E402
 
 PY = sys.executable
@@ -43,12 +47,55 @@ def check_backends() -> None:
         fixes.append(f"{PY} -m pip install patchright && {PY} -m patchright install chromium")
 
 
+def _chrome_probe(timeout_ms: int = 20_000) -> tuple[bool, str, str]:
+    """真启动一次 chrome 通道（headless + 临时 profile），返回 (可用, 版本, 说明)。
+
+    为什么必须真启动：本机系统 Chrome 156 与 patchright 1.63.0 存在版本代差，
+    ``launch_persistent_context(channel="chrome")`` 必失败
+    （``Failed to create a ProcessSingleton`` / ``Crashpad settings.dat 拒绝访问 0x5``），
+    但 chrome.exe 明明白白存在 —— 只查路径的旧实现会报出
+    ``[✓] T1 可用 channel=chrome`` 这种假绿灯，用户拿着错误结论去排查别处。
+    """
+    ver = _tiers.chrome_version() or "?"
+    try:
+        from patchright.sync_api import sync_playwright
+    except Exception as e:
+        return False, ver, f"patchright 不可用：{type(e).__name__}"
+    tmp = tempfile.mkdtemp(prefix="sawt-chrome-probe-")
+    try:
+        with sync_playwright() as p:
+            ctx = p.chromium.launch_persistent_context(
+                user_data_dir=tmp, channel="chrome", headless=True,
+                no_viewport=True, timeout=timeout_ms)
+            try:
+                page = ctx.new_page()
+                ua = page.evaluate("() => navigator.userAgent")
+            finally:
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
+        return True, ver, f"UA={short(ua, 72)}"
+    except Exception as e:
+        msg = re.sub(r"\s+", " ", f"{type(e).__name__}: {e}").strip()
+        return False, ver, msg[:220]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def check_browsers() -> None:
     print("\n浏览器二进制：")
-    chrome = _tiers.chrome_present()
-    line(OK if chrome else WARN, "系统 Chrome",
-         "已检测到（T1 可用 channel=chrome，反检测更佳）" if chrome
-         else "未检测到，T1 将回退到 Chromium")
+    chrome = _tiers.chrome_exe()
+    if not chrome:
+        line(WARN, "系统 Chrome", "未检测到 → T1 使用 patchright 自带 Chromium（可用）")
+    else:
+        launch_ok, ver, why = _chrome_probe()
+        line(OK, "系统 Chrome", f"已安装 Chrome {ver}  {chrome}")
+        if launch_ok:
+            line(OK, "T1 chrome 通道", f"真启动通过 —— {why}")
+        else:
+            line(WARN, "T1 chrome 通道", "真启动失败，抓取时自动回退 patchright 自带 Chromium（结果里会标 degraded）")
+            print(f"        实测失败原因: {why}")
 
     try:
         from patchright._impl._driver import compute_driver_executable  # noqa: F401
@@ -79,7 +126,7 @@ def check_browsers() -> None:
         except Exception:
             line(WARN, label, f"未安装 —— 如需 T2：{cmd}")
 
-    if not chrome:
+    if not _tiers.chrome_exe():
         fixes.append("安装 Google Chrome —— T1 默认有头 + channel=chrome，可显著提升反检测表现")
 
 
@@ -232,13 +279,8 @@ def check_miniprogram() -> None:
     else:
         line(WARN, "W0 包盘点", "未找到小程序缓存（PC 微信未装或从未打开过小程序）")
 
-    # W1：开发者工具
-    devtools_homes = [
-        Path("C:/Program Files (x86)/Tencent/微信web开发者工具"),
-        Path("C:/Program Files/Tencent/微信web开发者工具"),
-        Path("D:/Program Files (x86)/Tencent/微信web开发者工具"),
-        Path("D:/Program Files/Tencent/微信web开发者工具"),
-    ]
+    # W1：开发者工具（盘符不写死，扫本机所有存在的盘）
+    devtools_homes = wechat_devtools_homes()
     dev = next((h for h in devtools_homes if h.is_dir()), None)
     cli = None
     for home in devtools_homes:
@@ -267,13 +309,7 @@ def check_miniprogram() -> None:
             if cand.exists():
                 mitm = str(cand)
                 break
-    wechat = None
-    for p in (Path("E:/Program Files/Weixin/Weixin.exe"),
-              Path("C:/Program Files/Tencent/WeChat/WeChat.exe"),
-              Path("D:/Program Files/Tencent/WeChat/WeChat.exe")):
-        if p.exists():
-            wechat = p
-            break
+    wechat = next((p for p in wechat_client_candidates() if p.exists()), None)
     if mitm:
         line(OK, "W2 MITM", f"mitmproxy 就绪：{mitm}")
     else:

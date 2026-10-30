@@ -45,7 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wait-ms", type=int, default=2500, help="渲染后额外等待毫秒")
     p.add_argument("--challenge-wait", type=int, default=15000, dest="challenge_wait",
                    help="挑战页最多等多久自动放行（毫秒，默认 15000）")
-    p.add_argument("--min-text", type=int, default=200, help="内容下限（字符）")
+    p.add_argument("--min-text", type=int, default=80,
+                   help="内容下限（字符，默认 80；与 fetch.py 保持一致）")
     p.add_argument("--proxy", help="走代理，如 http://127.0.0.1:7897")
     p.add_argument("--headless", action="store_true", help="无头模式（默认有头）")
     p.add_argument("--min-interval", type=float, default=1.0, help="同域最小间隔秒")
